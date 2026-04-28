@@ -1,10 +1,12 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using GitlabNotifier.Data;
 using GitlabNotifier.Puller.Api;
 using GitlabNotifier.Puller.Configuration;
 using GitlabNotifier.Puller.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Refit;
@@ -17,6 +19,10 @@ builder.Configuration.AddJsonFile(
     reloadOnChange: false);
 
 builder.Services.Configure<GitlabOptions>(builder.Configuration.GetRequiredSection("Gitlab"));
+
+builder.Services.AddDbContext<GitlabNotifierDbContext>(options =>
+    options.UseSqlite(builder.Configuration.GetConnectionString("GitlabNotifier")
+        ?? "Data Source=gitlab-notifier.db"));
 
 builder.Services
     .AddRefitClient<IGitlabApiClient>()
@@ -42,11 +48,18 @@ builder.Services
     });
 
 builder.Services.AddTransient<GitlabDataPuller>();
+builder.Services.AddTransient<GitlabMergeRequestCacheUpdater>();
 
 using var host = builder.Build();
+using var scope = host.Services.CreateScope();
 
-var gitlabDataPuller = host.Services.GetRequiredService<GitlabDataPuller>();
+var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
+await dbContext.Database.EnsureCreatedAsync();
+
+var gitlabDataPuller = scope.ServiceProvider.GetRequiredService<GitlabDataPuller>();
+var cacheUpdater = scope.ServiceProvider.GetRequiredService<GitlabMergeRequestCacheUpdater>();
 var mergeRequests = await gitlabDataPuller.GetMergeRequestsForCurrentUserAsync();
+await cacheUpdater.UpdateAsync(mergeRequests);
 
 Console.WriteLine(JsonSerializer.Serialize(
     mergeRequests,

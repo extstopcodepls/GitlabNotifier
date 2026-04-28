@@ -22,9 +22,12 @@ public sealed class GitlabMergeRequest
     [JsonPropertyName("author")]
     public GitlabUser? Author { get; init; }
 
+    [JsonPropertyName("assignee")]
+    public GitlabUser? Assignee { get; init; }
+
     [JsonPropertyName("assignees")]
-    public IReadOnlyCollection<GitlabUser> Assignees { get; init; } = [];
+    public IReadOnlyCollection<GitlabUser>? Assignees { get; init; }
 
     [JsonPropertyName("reviewers")]
-    public IReadOnlyCollection<GitlabUser> Reviewers { get; init; } = [];
+    public IReadOnlyCollection<GitlabUser>? Reviewers { get; init; }
 }

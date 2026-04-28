@@ -98,8 +98,8 @@ public sealed class GitlabDataPuller
                 Title = mergeRequest.Title,
                 WebUrl = mergeRequest.WebUrl,
                 Author = mergeRequest.Author,
-                Assignees = mergeRequest.Assignees,
-                Reviewers = mergeRequest.Reviewers,
+                Assignees = GetAssignees(mergeRequest),
+                Reviewers = mergeRequest.Reviewers ?? [],
                 ApprovedBy = approvedBy
             });
         }
@@ -130,7 +130,7 @@ public sealed class GitlabDataPuller
                 $"GitLab API returned an empty approvals response for project {mergeRequest.ProjectId}, merge request {mergeRequest.Iid}.");
         }
 
-        return response.Content.ApprovedBy
+        return (response.Content.ApprovedBy ?? [])
             .Where(approval => approval.User is not null)
             .Select(approval => new MergeRequestApprovalInfo
             {
@@ -138,6 +138,18 @@ public sealed class GitlabDataPuller
                 ApprovedAt = approval.ApprovedAt
             })
             .ToList();
+    }
+
+    private static IReadOnlyCollection<GitlabUser> GetAssignees(GitlabMergeRequest mergeRequest)
+    {
+        if (mergeRequest.Assignees is { Count: > 0 })
+        {
+            return mergeRequest.Assignees;
+        }
+
+        return mergeRequest.Assignee is null
+            ? []
+            : [mergeRequest.Assignee];
     }
 
     private static bool TryGetNextPage<T>(ApiResponse<T> response, out int nextPage)
