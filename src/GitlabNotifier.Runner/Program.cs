@@ -1,13 +1,14 @@
 using System.Net.Http.Headers;
-using System.Text.Json;
 using GitlabNotifier.Data;
-using GitlabNotifier.Puller.Api;
-using GitlabNotifier.Puller.Configuration;
-using GitlabNotifier.Puller.Services;
+using GitlabNotifier.Runner.Api;
+using GitlabNotifier.Runner.Configuration;
+using GitlabNotifier.Runner.Services;
+using GitlabNotifier.Runner.Notifications;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Refit;
 
@@ -19,6 +20,15 @@ builder.Configuration.AddJsonFile(
     reloadOnChange: false);
 
 builder.Services.Configure<GitlabOptions>(builder.Configuration.GetRequiredSection("Gitlab"));
+builder.Services.Configure<RunnerOptions>(builder.Configuration.GetRequiredSection("Runner"));
+
+builder.Logging.ClearProviders();
+builder.Logging.AddConfiguration(builder.Configuration.GetRequiredSection("Logging"));
+builder.Logging.AddSimpleConsole(options =>
+{
+    options.SingleLine = true;
+    options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
+});
 
 builder.Services.AddDbContext<GitlabNotifierDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("GitlabNotifier")
@@ -49,21 +59,15 @@ builder.Services
 
 builder.Services.AddTransient<GitlabDataPuller>();
 builder.Services.AddTransient<GitlabMergeRequestCacheUpdater>();
+builder.Services.AddSingleton<GitlabMergeRequestNotificationService>();
+builder.Services.AddSingleton<IGitlabMergeRequestNotificationService>(
+    serviceProvider => serviceProvider.GetRequiredService<GitlabMergeRequestNotificationService>());
+builder.Services.AddHostedService(
+    serviceProvider => serviceProvider.GetRequiredService<GitlabMergeRequestNotificationService>());
+builder.Services.AddHostedService<GitlabPullerWorker>();
 
 using var host = builder.Build();
-using var scope = host.Services.CreateScope();
-
-var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
-await dbContext.Database.EnsureCreatedAsync();
-
-var gitlabDataPuller = scope.ServiceProvider.GetRequiredService<GitlabDataPuller>();
-var cacheUpdater = scope.ServiceProvider.GetRequiredService<GitlabMergeRequestCacheUpdater>();
-var mergeRequests = await gitlabDataPuller.GetMergeRequestsForCurrentUserAsync();
-await cacheUpdater.UpdateAsync(mergeRequests);
-
-Console.WriteLine(JsonSerializer.Serialize(
-    mergeRequests,
-    new JsonSerializerOptions { WriteIndented = true }));
+await host.RunAsync();
 
 static Uri EnsureTrailingSlash(Uri uri)
 {

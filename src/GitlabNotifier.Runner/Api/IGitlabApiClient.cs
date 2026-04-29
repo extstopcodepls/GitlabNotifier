@@ -1,7 +1,7 @@
-using GitlabNotifier.Puller.Models;
+using GitlabNotifier.Runner.Models;
 using Refit;
 
-namespace GitlabNotifier.Puller.Api;
+namespace GitlabNotifier.Runner.Api;
 
 public interface IGitlabApiClient
 {

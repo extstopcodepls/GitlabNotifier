@@ -1,28 +1,27 @@
-using GitlabNotifier.Puller.Api;
-using GitlabNotifier.Puller.Models;
+using GitlabNotifier.Runner.Api;
+using GitlabNotifier.Runner.Models;
+using Microsoft.Extensions.Logging;
 using Refit;
 
-namespace GitlabNotifier.Puller.Services;
+namespace GitlabNotifier.Runner.Services;
 
-public sealed class GitlabDataPuller
+public sealed class GitlabDataPuller(
+    IGitlabApiClient gitlabApiClient,
+    ILogger<GitlabDataPuller> logger)
 {
     private const int PerPage = 100;
-
-    private readonly IGitlabApiClient _gitlabApiClient;
-
-    public GitlabDataPuller(IGitlabApiClient gitlabApiClient)
-    {
-        _gitlabApiClient = gitlabApiClient;
-    }
+    private const string OpenedState = "opened";
 
     public async Task<GitlabMergeRequestsData> GetMergeRequestsForCurrentUserAsync(
         CancellationToken cancellationToken = default)
     {
+        logger.LogInformation("Starting GitLab merge request pull.");
+
         var assignedToUser = await GetMergeRequestsAsync("assigned_to_me", cancellationToken);
         var reviewerForUser = await GetMergeRequestsAsync("reviews_for_me", cancellationToken);
         var approvalsByMergeRequest = new Dictionary<(long ProjectId, long Iid), IReadOnlyCollection<MergeRequestApprovalInfo>>();
 
-        return new GitlabMergeRequestsData
+        var result = new GitlabMergeRequestsData
         {
             AssignedToUser = await AddApprovalInfoAsync(
                 assignedToUser,
@@ -33,6 +32,13 @@ public sealed class GitlabDataPuller
                 approvalsByMergeRequest,
                 cancellationToken)
         };
+
+        logger.LogInformation(
+            "Finished GitLab merge request pull. Assigned scope count: {AssignedCount}; reviewer scope count: {ReviewerCount}.",
+            result.AssignedToUser.Count,
+            result.ReviewerForUser.Count);
+
+        return result;
     }
 
     private async Task<IReadOnlyCollection<GitlabMergeRequest>> GetMergeRequestsAsync(
@@ -44,9 +50,11 @@ public sealed class GitlabDataPuller
 
         while (true)
         {
-            var response = await _gitlabApiClient.GetMergeRequestsAsync(
+            logger.LogDebug("Requesting GitLab merge requests. Scope: {Scope}; page: {Page}.", scope, page);
+
+            var response = await gitlabApiClient.GetMergeRequestsAsync(
                 scope,
-                "opened",
+                "all",
                 PerPage,
                 page,
                 cancellationToken);
@@ -65,9 +73,20 @@ public sealed class GitlabDataPuller
             }
 
             mergeRequests.AddRange(response.Content);
+            logger.LogDebug(
+                "Received GitLab merge request page. Scope: {Scope}; page: {Page}; page item count: {PageItemCount}; total so far: {TotalCount}.",
+                scope,
+                page,
+                response.Content.Count,
+                mergeRequests.Count);
 
             if (!TryGetNextPage(response, out page))
             {
+                logger.LogInformation(
+                    "Completed GitLab merge request list request. Scope: {Scope}; total count: {TotalCount}.",
+                    scope,
+                    mergeRequests.Count);
+
                 return mergeRequests;
             }
         }
@@ -82,12 +101,25 @@ public sealed class GitlabDataPuller
 
         foreach (var mergeRequest in mergeRequests)
         {
-            var approvalKey = (mergeRequest.ProjectId, mergeRequest.Iid);
+            var approvedBy = Array.Empty<MergeRequestApprovalInfo>();
 
-            if (!approvalsByMergeRequest.TryGetValue(approvalKey, out var approvedBy))
+            if (IsOpened(mergeRequest))
             {
-                approvedBy = await GetApprovalsAsync(mergeRequest, cancellationToken);
-                approvalsByMergeRequest.Add(approvalKey, approvedBy);
+                var approvalKey = (mergeRequest.ProjectId, mergeRequest.Iid);
+
+                if (!approvalsByMergeRequest.TryGetValue(approvalKey, out var cachedApprovedBy))
+                {
+                    logger.LogDebug(
+                        "Requesting GitLab approvals. ProjectId: {ProjectId}; MergeRequestIid: {MergeRequestIid}; Title: {Title}.",
+                        mergeRequest.ProjectId,
+                        mergeRequest.Iid,
+                        mergeRequest.Title);
+
+                    cachedApprovedBy = await GetApprovalsAsync(mergeRequest, cancellationToken);
+                    approvalsByMergeRequest.Add(approvalKey, cachedApprovedBy);
+                }
+
+                approvedBy = cachedApprovedBy.ToArray();
             }
 
             result.Add(new MergeRequestInfo
@@ -97,6 +129,7 @@ public sealed class GitlabDataPuller
                 ProjectId = mergeRequest.ProjectId,
                 Title = mergeRequest.Title,
                 WebUrl = mergeRequest.WebUrl,
+                State = mergeRequest.State,
                 Author = mergeRequest.Author,
                 Assignees = GetAssignees(mergeRequest),
                 Reviewers = mergeRequest.Reviewers ?? [],
@@ -111,7 +144,7 @@ public sealed class GitlabDataPuller
         GitlabMergeRequest mergeRequest,
         CancellationToken cancellationToken)
     {
-        var response = await _gitlabApiClient.GetMergeRequestApprovalsAsync(
+        var response = await gitlabApiClient.GetMergeRequestApprovalsAsync(
             mergeRequest.ProjectId,
             mergeRequest.Iid,
             cancellationToken);
@@ -138,6 +171,11 @@ public sealed class GitlabDataPuller
                 ApprovedAt = approval.ApprovedAt
             })
             .ToList();
+    }
+
+    private static bool IsOpened(GitlabMergeRequest mergeRequest)
+    {
+        return string.Equals(mergeRequest.State, OpenedState, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyCollection<GitlabUser> GetAssignees(GitlabMergeRequest mergeRequest)

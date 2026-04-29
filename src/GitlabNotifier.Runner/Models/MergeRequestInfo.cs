@@ -1,4 +1,4 @@
-namespace GitlabNotifier.Puller.Models;
+namespace GitlabNotifier.Runner.Models;
 
 public sealed class MergeRequestInfo
 {
@@ -11,6 +11,8 @@ public sealed class MergeRequestInfo
     public string Title { get; init; } = string.Empty;
 
     public string WebUrl { get; init; } = string.Empty;
+
+    public string State { get; init; } = string.Empty;
 
     public GitlabUser? Author { get; init; }
 

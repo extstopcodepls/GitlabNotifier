@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace GitlabNotifier.Puller.Models;
+namespace GitlabNotifier.Runner.Models;
 
 public sealed class GitlabMergeRequest
 {
@@ -18,6 +18,9 @@ public sealed class GitlabMergeRequest
 
     [JsonPropertyName("web_url")]
     public string WebUrl { get; init; } = string.Empty;
+
+    [JsonPropertyName("state")]
+    public string State { get; init; } = string.Empty;
 
     [JsonPropertyName("author")]
     public GitlabUser? Author { get; init; }

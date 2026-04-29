@@ -1,4 +1,4 @@
-namespace GitlabNotifier.Puller.Configuration;
+namespace GitlabNotifier.Runner.Configuration;
 
 public sealed class GitlabOptions
 {

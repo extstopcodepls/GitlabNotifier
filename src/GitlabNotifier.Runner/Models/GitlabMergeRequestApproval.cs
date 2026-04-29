@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace GitlabNotifier.Puller.Models;
+namespace GitlabNotifier.Runner.Models;
 
 public sealed class GitlabMergeRequestApproval
 {
