@@ -63,7 +63,7 @@ public sealed class GitlabMergeRequestNotificationService(
         var body = BuildNotificationBody(updateResult);
 
         logger.LogInformation(
-            "Showing desktop notification. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
+            "Showing desktop notification. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; review requested on assigned MRs: {ReviewRequestedCount}; title changes: {TitleChangeCount}.",
             updateResult.AddedCount,
             updateResult.UpdatedCount,
             updateResult.RemovedCount,
@@ -71,6 +71,7 @@ public sealed class GitlabMergeRequestNotificationService(
             updateResult.UnassignedFromMeMergeRequests.Count,
             updateResult.ReviewerForMeMergeRequests.Count,
             updateResult.RemovedFromReviewMergeRequests.Count,
+            updateResult.ReviewRequestedOnAssignedMergeRequests.Count,
             updateResult.TitleChanges.Count);
 
         var notification = new Notification
@@ -118,6 +119,7 @@ public sealed class GitlabMergeRequestNotificationService(
             lines,
             "Removed from review",
             updateResult.RemovedFromReviewMergeRequests);
+        AddReviewRequestedLines(lines, updateResult.ReviewRequestedOnAssignedMergeRequests);
         AddTitleChangeLines(lines, updateResult.TitleChanges);
         AddMergeRequestLines(
             lines,
@@ -150,6 +152,48 @@ public sealed class GitlabMergeRequestNotificationService(
         {
             lines.Add($"{label}: +{mergeRequests.Count - 3} more");
         }
+    }
+
+    private static void AddReviewRequestedLines(
+        ICollection<string> lines,
+        IReadOnlyCollection<MergeRequestReviewRequestedInfo> reviewRequests)
+    {
+        foreach (var reviewRequest in reviewRequests.Take(3))
+        {
+            lines.Add($"Review requested: {reviewRequest.Title} ({FormatReviewers(reviewRequest.RequestedReviewers)})");
+        }
+
+        if (reviewRequests.Count > 3)
+        {
+            lines.Add($"Review requested: +{reviewRequests.Count - 3} more");
+        }
+    }
+
+    private static string FormatReviewers(IReadOnlyCollection<GitlabUser> reviewers)
+    {
+        var reviewerNames = reviewers
+            .Take(3)
+            .Select(GetReviewerDisplayName)
+            .ToList();
+
+        if (reviewers.Count > 3)
+        {
+            reviewerNames.Add($"+{reviewers.Count - 3} more");
+        }
+
+        return string.Join(", ", reviewerNames);
+    }
+
+    private static string GetReviewerDisplayName(GitlabUser reviewer)
+    {
+        if (!string.IsNullOrWhiteSpace(reviewer.Username))
+        {
+            return $"@{reviewer.Username}";
+        }
+
+        return string.IsNullOrWhiteSpace(reviewer.Name)
+            ? $"user {reviewer.Id}"
+            : reviewer.Name;
     }
 
     private static void AddTitleChangeLines(

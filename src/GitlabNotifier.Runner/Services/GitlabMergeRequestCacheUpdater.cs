@@ -119,12 +119,13 @@ public sealed class GitlabMergeRequestCacheUpdater(
             UnassignedFromMeMergeRequests = changeCollector.UnassignedFromMeMergeRequests,
             ReviewerForMeMergeRequests = changeCollector.ReviewerForMeMergeRequests,
             RemovedFromReviewMergeRequests = changeCollector.RemovedFromReviewMergeRequests,
+            ReviewRequestedOnAssignedMergeRequests = changeCollector.ReviewRequestedOnAssignedMergeRequests,
             TitleChanges = changeCollector.TitleChanges,
             UpdatedCount = updatedCount
         };
 
         logger.LogInformation(
-            "Finished merge request cache update. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
+            "Finished merge request cache update. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; review requested on assigned MRs: {ReviewRequestedCount}; title changes: {TitleChangeCount}.",
             result.AddedCount,
             result.UpdatedCount,
             result.RemovedCount,
@@ -132,6 +133,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
             result.UnassignedFromMeMergeRequests.Count,
             result.ReviewerForMeMergeRequests.Count,
             result.RemovedFromReviewMergeRequests.Count,
+            result.ReviewRequestedOnAssignedMergeRequests.Count,
             result.TitleChanges.Count);
 
         return result;
@@ -313,6 +315,19 @@ public sealed class GitlabMergeRequestCacheUpdater(
                 source.Title);
         }
 
+        var addedReviewers = GetAddedReviewers(entity, source.Reviewers);
+
+        if (isAssignedToCurrentUser && addedReviewers.Count > 0)
+        {
+            changeCollector.ReviewRequestedOnAssignedMergeRequests.Add(ToReviewRequestedInfo(source, addedReviewers));
+            logger.LogInformation(
+                "Review requested on MR assigned to current user. ProjectId: {ProjectId}; Iid: {Iid}; Title: {Title}; Reviewers: {Reviewers}.",
+                source.ProjectId,
+                source.Iid,
+                source.Title,
+                string.Join(", ", addedReviewers.Select(GetReviewerDisplayName)));
+        }
+
         if (!string.Equals(entity.Title, source.Title, StringComparison.Ordinal))
         {
             changeCollector.TitleChanges.Add(new MergeRequestTitleChangeInfo
@@ -373,6 +388,21 @@ public sealed class GitlabMergeRequestCacheUpdater(
         entity.LastSeenAt = seenAt;
 
         return changed;
+    }
+
+    private static IReadOnlyCollection<GitlabUser> GetAddedReviewers(
+        MergeRequestEntity entity,
+        IReadOnlyCollection<GitlabUser> reviewers)
+    {
+        var existingReviewerIds = entity.Reviewers
+            .Select(reviewer => reviewer.UserId)
+            .ToHashSet();
+
+        return reviewers
+            .Where(reviewer => !existingReviewerIds.Contains(reviewer.Id))
+            .GroupBy(reviewer => reviewer.Id)
+            .Select(group => group.First())
+            .ToList();
     }
 
     private bool SyncAssignees(
@@ -533,6 +563,28 @@ public sealed class GitlabMergeRequestCacheUpdater(
         };
     }
 
+    private static MergeRequestReviewRequestedInfo ToReviewRequestedInfo(
+        MergeRequestInfo mergeRequest,
+        IReadOnlyCollection<GitlabUser> requestedReviewers)
+    {
+        return new MergeRequestReviewRequestedInfo
+        {
+            Id = mergeRequest.Id,
+            Iid = mergeRequest.Iid,
+            ProjectId = mergeRequest.ProjectId,
+            Title = mergeRequest.Title,
+            WebUrl = mergeRequest.WebUrl,
+            RequestedReviewers = requestedReviewers
+        };
+    }
+
+    private static string GetReviewerDisplayName(GitlabUser reviewer)
+    {
+        return string.IsNullOrWhiteSpace(reviewer.Username)
+            ? reviewer.Name
+            : $"@{reviewer.Username}";
+    }
+
     private sealed class CacheChangeCollector
     {
         public List<MergeRequestChangeInfo> AddedMergeRequests { get; } = [];
@@ -546,6 +598,8 @@ public sealed class GitlabMergeRequestCacheUpdater(
         public List<MergeRequestChangeInfo> ReviewerForMeMergeRequests { get; } = [];
 
         public List<MergeRequestChangeInfo> RemovedFromReviewMergeRequests { get; } = [];
+
+        public List<MergeRequestReviewRequestedInfo> ReviewRequestedOnAssignedMergeRequests { get; } = [];
 
         public List<MergeRequestTitleChangeInfo> TitleChanges { get; } = [];
     }

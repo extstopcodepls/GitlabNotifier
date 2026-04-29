@@ -59,7 +59,7 @@ public sealed class GitlabPullerWorker(
             if (updateResult.HasChanges)
             {
                 logger.LogInformation(
-                    "GitLab MR cache changed. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
+                    "GitLab MR cache changed. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; review requested on assigned MRs: {ReviewRequestedCount}; title changes: {TitleChangeCount}.",
                     updateResult.AddedCount,
                     updateResult.UpdatedCount,
                     updateResult.RemovedCount,
@@ -67,6 +67,7 @@ public sealed class GitlabPullerWorker(
                     updateResult.UnassignedFromMeMergeRequests.Count,
                     updateResult.ReviewerForMeMergeRequests.Count,
                     updateResult.RemovedFromReviewMergeRequests.Count,
+                    updateResult.ReviewRequestedOnAssignedMergeRequests.Count,
                     updateResult.TitleChanges.Count);
 
                 logger.LogInformation("Sending desktop notification for GitLab MR cache changes.");

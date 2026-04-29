@@ -14,6 +14,8 @@ public sealed class GitlabMergeRequestCacheUpdateResult
 
     public IReadOnlyCollection<MergeRequestChangeInfo> RemovedFromReviewMergeRequests { get; init; } = [];
 
+    public IReadOnlyCollection<MergeRequestReviewRequestedInfo> ReviewRequestedOnAssignedMergeRequests { get; init; } = [];
+
     public IReadOnlyCollection<MergeRequestTitleChangeInfo> TitleChanges { get; init; } = [];
 
     public int UpdatedCount { get; init; }
@@ -29,6 +31,7 @@ public sealed class GitlabMergeRequestCacheUpdateResult
         || UnassignedFromMeMergeRequests.Count > 0
         || ReviewerForMeMergeRequests.Count > 0
         || RemovedFromReviewMergeRequests.Count > 0
+        || ReviewRequestedOnAssignedMergeRequests.Count > 0
         || TitleChanges.Count > 0
         || UpdatedCount > 0;
 }
@@ -59,4 +62,19 @@ public sealed class MergeRequestTitleChangeInfo
     public string NewTitle { get; init; } = string.Empty;
 
     public string WebUrl { get; init; } = string.Empty;
+}
+
+public sealed class MergeRequestReviewRequestedInfo
+{
+    public long Id { get; init; }
+
+    public long Iid { get; init; }
+
+    public long ProjectId { get; init; }
+
+    public string Title { get; init; } = string.Empty;
+
+    public string WebUrl { get; init; } = string.Empty;
+
+    public IReadOnlyCollection<GitlabUser> RequestedReviewers { get; init; } = [];
 }
