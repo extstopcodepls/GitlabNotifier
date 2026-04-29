@@ -54,7 +54,7 @@ public sealed class GitlabDataPuller(
 
             var response = await gitlabApiClient.GetMergeRequestsAsync(
                 scope,
-                "all",
+                OpenedState,
                 PerPage,
                 page,
                 cancellationToken);

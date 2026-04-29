@@ -63,11 +63,10 @@ public sealed class GitlabMergeRequestNotificationService(
         var body = BuildNotificationBody(updateResult);
 
         logger.LogInformation(
-            "Showing desktop notification. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; merged removed: {MergedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
+            "Showing desktop notification. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
             updateResult.AddedCount,
             updateResult.UpdatedCount,
             updateResult.RemovedCount,
-            updateResult.MergedMergeRequests.Count,
             updateResult.AssignedToMeMergeRequests.Count,
             updateResult.UnassignedFromMeMergeRequests.Count,
             updateResult.ReviewerForMeMergeRequests.Count,
@@ -120,10 +119,6 @@ public sealed class GitlabMergeRequestNotificationService(
             "Removed from review",
             updateResult.RemovedFromReviewMergeRequests);
         AddTitleChangeLines(lines, updateResult.TitleChanges);
-        AddMergeRequestLines(
-            lines,
-            "Merged and removed from cache",
-            updateResult.MergedMergeRequests);
         AddMergeRequestLines(
             lines,
             "New in cache",

@@ -6,8 +6,6 @@ public sealed class GitlabMergeRequestCacheUpdateResult
 
     public IReadOnlyCollection<MergeRequestChangeInfo> RemovedMergeRequests { get; init; } = [];
 
-    public IReadOnlyCollection<MergeRequestChangeInfo> MergedMergeRequests { get; init; } = [];
-
     public IReadOnlyCollection<MergeRequestChangeInfo> AssignedToMeMergeRequests { get; init; } = [];
 
     public IReadOnlyCollection<MergeRequestChangeInfo> UnassignedFromMeMergeRequests { get; init; } = [];
@@ -27,7 +25,6 @@ public sealed class GitlabMergeRequestCacheUpdateResult
     public bool HasChanges =>
         AddedMergeRequests.Count > 0
         || RemovedMergeRequests.Count > 0
-        || MergedMergeRequests.Count > 0
         || AssignedToMeMergeRequests.Count > 0
         || UnassignedFromMeMergeRequests.Count > 0
         || ReviewerForMeMergeRequests.Count > 0

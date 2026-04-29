@@ -11,7 +11,6 @@ public sealed class GitlabMergeRequestCacheUpdater(
     ILogger<GitlabMergeRequestCacheUpdater> logger)
 {
     private const string OpenedState = "opened";
-    private const string MergedState = "merged";
 
     public async Task<GitlabMergeRequestCacheUpdateResult> UpdateAsync(
         GitlabMergeRequestsData mergeRequestsData,
@@ -41,20 +40,12 @@ public sealed class GitlabMergeRequestCacheUpdater(
         var latestOpenMergeRequestIds = openMergeRequests
             .Select(mergeRequest => mergeRequest.Id)
             .ToHashSet();
-        var mergedMergeRequestIds = mergeRequests
-            .Where(IsMerged)
-            .Select(mergeRequest => mergeRequest.Id)
-            .ToHashSet();
-        var mergedMergeRequestsById = mergeRequests
-            .Where(IsMerged)
-            .ToDictionary(mergeRequest => mergeRequest.Id);
         var seenAt = DateTimeOffset.UtcNow;
 
         logger.LogInformation(
-            "Prepared cache update input. Current scoped MRs: {CurrentCount}; open MRs: {OpenCount}; merged MRs: {MergedCount}; assigned open: {AssignedOpenCount}; reviewer open: {ReviewerOpenCount}.",
+            "Prepared cache update input. Current scoped MRs: {CurrentCount}; open MRs: {OpenCount}; assigned open: {AssignedOpenCount}; reviewer open: {ReviewerOpenCount}.",
             currentMergeRequestIds.Count,
             openMergeRequests.Count,
-            mergedMergeRequestIds.Count,
             assignedMergeRequestIds.Count,
             reviewerMergeRequestIds.Count);
 
@@ -72,23 +63,15 @@ public sealed class GitlabMergeRequestCacheUpdater(
             removedMergeRequests.Count);
 
         changeCollector.RemovedMergeRequests.AddRange(removedMergeRequests
-            .Where(mergeRequest => !mergedMergeRequestIds.Contains(mergeRequest.Id)
-                && (currentMergeRequestIds.Contains(mergeRequest.Id)
-                    || (!mergeRequest.IsAssignedToCurrentUser && !mergeRequest.IsReviewerForCurrentUser)))
+            .Where(mergeRequest => currentMergeRequestIds.Contains(mergeRequest.Id)
+                || (!mergeRequest.IsAssignedToCurrentUser && !mergeRequest.IsReviewerForCurrentUser))
             .Select(ToChangeInfo));
-        changeCollector.MergedMergeRequests.AddRange(removedMergeRequests
-            .Where(mergeRequest => mergedMergeRequestIds.Contains(mergeRequest.Id))
-            .Select(mergeRequest => mergedMergeRequestsById.TryGetValue(mergeRequest.Id, out var source)
-                ? ToChangeInfo(source)
-                : ToChangeInfo(mergeRequest)));
         changeCollector.UnassignedFromMeMergeRequests.AddRange(removedMergeRequests
-            .Where(mergeRequest => !mergedMergeRequestIds.Contains(mergeRequest.Id)
-                && !currentMergeRequestIds.Contains(mergeRequest.Id)
+            .Where(mergeRequest => !currentMergeRequestIds.Contains(mergeRequest.Id)
                 && mergeRequest.IsAssignedToCurrentUser)
             .Select(ToChangeInfo));
         changeCollector.RemovedFromReviewMergeRequests.AddRange(removedMergeRequests
-            .Where(mergeRequest => !mergedMergeRequestIds.Contains(mergeRequest.Id)
-                && !currentMergeRequestIds.Contains(mergeRequest.Id)
+            .Where(mergeRequest => !currentMergeRequestIds.Contains(mergeRequest.Id)
                 && mergeRequest.IsReviewerForCurrentUser)
             .Select(ToChangeInfo));
 
@@ -132,7 +115,6 @@ public sealed class GitlabMergeRequestCacheUpdater(
         {
             AddedMergeRequests = changeCollector.AddedMergeRequests,
             RemovedMergeRequests = changeCollector.RemovedMergeRequests,
-            MergedMergeRequests = changeCollector.MergedMergeRequests,
             AssignedToMeMergeRequests = changeCollector.AssignedToMeMergeRequests,
             UnassignedFromMeMergeRequests = changeCollector.UnassignedFromMeMergeRequests,
             ReviewerForMeMergeRequests = changeCollector.ReviewerForMeMergeRequests,
@@ -142,11 +124,10 @@ public sealed class GitlabMergeRequestCacheUpdater(
         };
 
         logger.LogInformation(
-            "Finished merge request cache update. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; merged removed: {MergedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
+            "Finished merge request cache update. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
             result.AddedCount,
             result.UpdatedCount,
             result.RemovedCount,
-            result.MergedMergeRequests.Count,
             result.AssignedToMeMergeRequests.Count,
             result.UnassignedFromMeMergeRequests.Count,
             result.ReviewerForMeMergeRequests.Count,
@@ -164,6 +145,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
             .Include(mergeRequest => mergeRequest.Assignees)
             .Include(mergeRequest => mergeRequest.Reviewers)
             .Include(mergeRequest => mergeRequest.Approvals)
+            .AsSplitQuery()
             .AsQueryable();
 
         if (latestMergeRequestIds.Count > 0)
@@ -266,6 +248,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
             .Include(mergeRequest => mergeRequest.Assignees)
             .Include(mergeRequest => mergeRequest.Reviewers)
             .Include(mergeRequest => mergeRequest.Approvals)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(mergeRequest => mergeRequest.Id == source.Id, cancellationToken);
 
         if (entity is null)
@@ -526,11 +509,6 @@ public sealed class GitlabMergeRequestCacheUpdater(
         return string.Equals(mergeRequest.State, OpenedState, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsMerged(MergeRequestInfo mergeRequest)
-    {
-        return string.Equals(mergeRequest.State, MergedState, StringComparison.OrdinalIgnoreCase);
-    }
-
     private static MergeRequestChangeInfo ToChangeInfo(MergeRequestInfo mergeRequest)
     {
         return new MergeRequestChangeInfo
@@ -560,8 +538,6 @@ public sealed class GitlabMergeRequestCacheUpdater(
         public List<MergeRequestChangeInfo> AddedMergeRequests { get; } = [];
 
         public List<MergeRequestChangeInfo> RemovedMergeRequests { get; } = [];
-
-        public List<MergeRequestChangeInfo> MergedMergeRequests { get; } = [];
 
         public List<MergeRequestChangeInfo> AssignedToMeMergeRequests { get; } = [];
 
