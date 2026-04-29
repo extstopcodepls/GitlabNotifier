@@ -61,11 +61,6 @@ public sealed class GitlabMergeRequestNotificationService(
         }
 
         var body = BuildNotificationBody(updateResult);
-        var notification = new Notification
-        {
-            Title = "GitLab merge request data changed",
-            Body = body
-        };
 
         logger.LogInformation(
             "Showing desktop notification. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; merged removed: {MergedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; title changes: {TitleChangeCount}.",
@@ -78,6 +73,12 @@ public sealed class GitlabMergeRequestNotificationService(
             updateResult.ReviewerForMeMergeRequests.Count,
             updateResult.RemovedFromReviewMergeRequests.Count,
             updateResult.TitleChanges.Count);
+
+        var notification = new Notification
+        {
+            Title = "GitLab merge request data changed",
+            Body = body
+        };
 
         await _notificationManager.ShowNotification(notification, expirationTime: null);
     }
