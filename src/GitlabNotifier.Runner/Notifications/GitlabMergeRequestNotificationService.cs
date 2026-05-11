@@ -164,9 +164,22 @@ public sealed class GitlabMergeRequestNotificationService(
         using var scope = serviceScopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
 
-        return await dbContext.MergeRequests
+        var pendingMergeRequests = await dbContext.MergeRequests
             .AsNoTracking()
             .Where(mergeRequest => mergeRequest.HasUnseenChanges)
+            .Select(mergeRequest => new PendingMergeRequestNotificationInfo
+            {
+                Id = mergeRequest.Id,
+                Iid = mergeRequest.Iid,
+                ProjectId = mergeRequest.ProjectId,
+                Title = mergeRequest.Title,
+                WebUrl = mergeRequest.WebUrl,
+                LastSeenAt = mergeRequest.LastSeenAt,
+                UnseenChangedAt = mergeRequest.UnseenChangedAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return pendingMergeRequests
             .OrderByDescending(mergeRequest => mergeRequest.UnseenChangedAt ?? mergeRequest.LastSeenAt)
             .Select(mergeRequest => new MergeRequestChangeInfo
             {
@@ -176,7 +189,7 @@ public sealed class GitlabMergeRequestNotificationService(
                 Title = mergeRequest.Title,
                 WebUrl = mergeRequest.WebUrl
             })
-            .ToListAsync(cancellationToken);
+            .ToList();
     }
 
     private void OnNotificationActivated(object? sender, NotificationActivatedEventArgs args)
@@ -264,5 +277,22 @@ public sealed class GitlabMergeRequestNotificationService(
             : $"{gitlabUrl}/");
 
         return new Uri(baseUri, "dashboard/merge_requests").AbsoluteUri;
+    }
+
+    private sealed class PendingMergeRequestNotificationInfo
+    {
+        public long Id { get; init; }
+
+        public long Iid { get; init; }
+
+        public long ProjectId { get; init; }
+
+        public string Title { get; init; } = string.Empty;
+
+        public string WebUrl { get; init; } = string.Empty;
+
+        public DateTimeOffset LastSeenAt { get; init; }
+
+        public DateTimeOffset? UnseenChangedAt { get; init; }
     }
 }
