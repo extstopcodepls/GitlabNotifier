@@ -1,7 +1,10 @@
 using DesktopNotifications;
 using DesktopNotifications.Windows;
+using GitlabNotifier.Data;
 using GitlabNotifier.Runner.Configuration;
 using GitlabNotifier.Runner.Models;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,10 +14,15 @@ namespace GitlabNotifier.Runner.Notifications;
 
 public sealed class GitlabMergeRequestNotificationService(
     IOptions<GitlabOptions> gitlabOptions,
+    IOptions<RunnerOptions> runnerOptions,
+    IServiceScopeFactory serviceScopeFactory,
     ILogger<GitlabMergeRequestNotificationService> logger)
     : IHostedService, IGitlabMergeRequestNotificationService
 {
     private WindowsNotificationManager? _notificationManager;
+    private CancellationTokenSource? _notificationLoopCancellationTokenSource;
+    private Task? _notificationLoopTask;
+    private readonly SemaphoreSlim _notificationSemaphore = new(1, 1);
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -29,11 +37,30 @@ public sealed class GitlabMergeRequestNotificationService(
 
         await _notificationManager.Initialize();
         logger.LogInformation("Desktop notification manager initialized.");
+
+        _notificationLoopCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _notificationLoopTask = RunNotificationLoopAsync(_notificationLoopCancellationTokenSource.Token);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Stopping desktop notification manager.");
+
+        if (_notificationLoopCancellationTokenSource is not null)
+        {
+            await _notificationLoopCancellationTokenSource.CancelAsync();
+        }
+
+        if (_notificationLoopTask is not null)
+        {
+            try
+            {
+                await _notificationLoopTask.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
 
         if (_notificationManager is not null)
         {
@@ -41,8 +68,6 @@ public sealed class GitlabMergeRequestNotificationService(
             _notificationManager.NotificationDismissed -= OnNotificationDismissed;
             _notificationManager.Dispose();
         }
-
-        return Task.CompletedTask;
     }
 
     public async Task NotifyAsync(
@@ -54,33 +79,104 @@ public sealed class GitlabMergeRequestNotificationService(
             return;
         }
 
+        await ShowPendingMergeRequestNotificationAsync(cancellationToken);
+    }
+
+    private async Task RunNotificationLoopAsync(CancellationToken cancellationToken)
+    {
+        var reminderInterval = TimeSpan.FromSeconds(Math.Max(
+            1,
+            runnerOptions.Value.NotificationReminderIntervalSeconds));
+
+        logger.LogInformation(
+            "GitLab MR notification reminder loop started. Reminder interval: {ReminderInterval}.",
+            reminderInterval);
+
+        using var timer = new PeriodicTimer(reminderInterval);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await ShowPendingMergeRequestNotificationAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("GitLab MR notification reminder loop stopped.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "GitLab MR notification reminder loop failed.");
+        }
+    }
+
+    private async Task ShowPendingMergeRequestNotificationAsync(CancellationToken cancellationToken)
+    {
+        await _notificationSemaphore.WaitAsync(cancellationToken);
+
+        try
+        {
+            await ShowPendingMergeRequestNotificationCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _notificationSemaphore.Release();
+        }
+    }
+
+    private async Task ShowPendingMergeRequestNotificationCoreAsync(CancellationToken cancellationToken)
+    {
         if (_notificationManager is null)
         {
             logger.LogWarning("Notification manager is not initialized. Skipping desktop notification.");
             return;
         }
 
-        var body = BuildNotificationBody(updateResult);
+        var pendingMergeRequests = await GetPendingMergeRequestsAsync(cancellationToken);
+
+        if (pendingMergeRequests.Count == 0)
+        {
+            logger.LogDebug("No unseen GitLab MRs pending notification.");
+            return;
+        }
+
+        var body = BuildPendingNotificationBody(pendingMergeRequests);
 
         logger.LogInformation(
-            "Showing desktop notification. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; review requested on assigned MRs: {ReviewRequestedCount}; title changes: {TitleChangeCount}.",
-            updateResult.AddedCount,
-            updateResult.UpdatedCount,
-            updateResult.RemovedCount,
-            updateResult.AssignedToMeMergeRequests.Count,
-            updateResult.UnassignedFromMeMergeRequests.Count,
-            updateResult.ReviewerForMeMergeRequests.Count,
-            updateResult.RemovedFromReviewMergeRequests.Count,
-            updateResult.ReviewRequestedOnAssignedMergeRequests.Count,
-            updateResult.TitleChanges.Count);
+            "Showing desktop notification for unseen GitLab MRs. Count: {Count}.",
+            pendingMergeRequests.Count);
 
         var notification = new Notification
         {
-            Title = "GitLab merge request data changed",
+            Title = pendingMergeRequests.Count == 1
+                ? "GitLab merge request changed"
+                : "GitLab merge requests changed",
             Body = body
         };
 
         await _notificationManager.ShowNotification(notification, expirationTime: null);
+    }
+
+    private async Task<IReadOnlyCollection<MergeRequestChangeInfo>> GetPendingMergeRequestsAsync(
+        CancellationToken cancellationToken)
+    {
+        using var scope = serviceScopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
+
+        return await dbContext.MergeRequests
+            .AsNoTracking()
+            .Where(mergeRequest => mergeRequest.HasUnseenChanges)
+            .OrderByDescending(mergeRequest => mergeRequest.UnseenChangedAt ?? mergeRequest.LastSeenAt)
+            .Select(mergeRequest => new MergeRequestChangeInfo
+            {
+                Id = mergeRequest.Id,
+                Iid = mergeRequest.Iid,
+                ProjectId = mergeRequest.ProjectId,
+                Title = mergeRequest.Title,
+                WebUrl = mergeRequest.WebUrl
+            })
+            .ToListAsync(cancellationToken);
     }
 
     private void OnNotificationActivated(object? sender, NotificationActivatedEventArgs args)
@@ -89,6 +185,7 @@ public sealed class GitlabMergeRequestNotificationService(
             "GitLab notifier notification activated. Action: {ActionId}",
             args.ActionId);
 
+        _ = MarkPendingMergeRequestsSeenAsync();
         OpenMergeRequestsDashboard();
     }
 
@@ -99,116 +196,47 @@ public sealed class GitlabMergeRequestNotificationService(
             args.Reason);
     }
 
-    private static string BuildNotificationBody(GitlabMergeRequestCacheUpdateResult updateResult)
+    private async Task MarkPendingMergeRequestsSeenAsync()
     {
-        var lines = new List<string>();
-
-        AddMergeRequestLines(
-            lines,
-            "Assigned to you",
-            updateResult.AssignedToMeMergeRequests);
-        AddMergeRequestLines(
-            lines,
-            "Unassigned from you",
-            updateResult.UnassignedFromMeMergeRequests);
-        AddMergeRequestLines(
-            lines,
-            "Made reviewer",
-            updateResult.ReviewerForMeMergeRequests);
-        AddMergeRequestLines(
-            lines,
-            "Removed from review",
-            updateResult.RemovedFromReviewMergeRequests);
-        AddReviewRequestedLines(lines, updateResult.ReviewRequestedOnAssignedMergeRequests);
-        AddTitleChangeLines(lines, updateResult.TitleChanges);
-        AddMergeRequestLines(
-            lines,
-            "New in cache",
-            updateResult.AddedMergeRequests);
-        AddMergeRequestLines(
-            lines,
-            "Removed from cache",
-            updateResult.RemovedMergeRequests);
-
-        if (updateResult.UpdatedCount > 0)
+        try
         {
-            lines.Add($"Other updated MRs: {updateResult.UpdatedCount}");
+            using var scope = serviceScopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
+            var pendingMergeRequests = await dbContext.MergeRequests
+                .Where(mergeRequest => mergeRequest.HasUnseenChanges)
+                .ToListAsync();
+
+            foreach (var mergeRequest in pendingMergeRequests)
+            {
+                mergeRequest.HasUnseenChanges = false;
+                mergeRequest.UnseenChangedAt = null;
+            }
+
+            await dbContext.SaveChangesAsync();
+
+            logger.LogInformation(
+                "Marked unseen GitLab MRs as seen from notification click. Count: {Count}.",
+                pendingMergeRequests.Count);
         }
-
-        return string.Join(Environment.NewLine, lines.Take(8));
-    }
-
-    private static void AddMergeRequestLines(
-        ICollection<string> lines,
-        string label,
-        IReadOnlyCollection<MergeRequestChangeInfo> mergeRequests)
-    {
-        foreach (var mergeRequest in mergeRequests.Take(3))
+        catch (Exception ex)
         {
-            lines.Add($"{label}: {mergeRequest.Title}");
-        }
-
-        if (mergeRequests.Count > 3)
-        {
-            lines.Add($"{label}: +{mergeRequests.Count - 3} more");
+            logger.LogError(ex, "Failed to mark GitLab MRs as seen from notification click.");
         }
     }
 
-    private static void AddReviewRequestedLines(
-        ICollection<string> lines,
-        IReadOnlyCollection<MergeRequestReviewRequestedInfo> reviewRequests)
+    private static string BuildPendingNotificationBody(IReadOnlyCollection<MergeRequestChangeInfo> mergeRequests)
     {
-        foreach (var reviewRequest in reviewRequests.Take(3))
-        {
-            lines.Add($"Review requested: {reviewRequest.Title} ({FormatReviewers(reviewRequest.RequestedReviewers)})");
-        }
-
-        if (reviewRequests.Count > 3)
-        {
-            lines.Add($"Review requested: +{reviewRequests.Count - 3} more");
-        }
-    }
-
-    private static string FormatReviewers(IReadOnlyCollection<GitlabUser> reviewers)
-    {
-        var reviewerNames = reviewers
-            .Take(3)
-            .Select(GetReviewerDisplayName)
+        var lines = mergeRequests
+            .Take(8)
+            .Select(mergeRequest => $"MR needs attention: {mergeRequest.Title}")
             .ToList();
 
-        if (reviewers.Count > 3)
+        if (mergeRequests.Count > 8)
         {
-            reviewerNames.Add($"+{reviewers.Count - 3} more");
+            lines.Add($"+{mergeRequests.Count - 8} more unseen MRs");
         }
 
-        return string.Join(", ", reviewerNames);
-    }
-
-    private static string GetReviewerDisplayName(GitlabUser reviewer)
-    {
-        if (!string.IsNullOrWhiteSpace(reviewer.Username))
-        {
-            return $"@{reviewer.Username}";
-        }
-
-        return string.IsNullOrWhiteSpace(reviewer.Name)
-            ? $"user {reviewer.Id}"
-            : reviewer.Name;
-    }
-
-    private static void AddTitleChangeLines(
-        ICollection<string> lines,
-        IReadOnlyCollection<MergeRequestTitleChangeInfo> titleChanges)
-    {
-        foreach (var titleChange in titleChanges.Take(3))
-        {
-            lines.Add($"MR renamed: {titleChange.OldTitle} -> {titleChange.NewTitle}");
-        }
-
-        if (titleChanges.Count > 3)
-        {
-            lines.Add($"MR renamed: +{titleChanges.Count - 3} more");
-        }
+        return string.Join(Environment.NewLine, lines);
     }
 
     private void OpenMergeRequestsDashboard()

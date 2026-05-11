@@ -40,7 +40,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
         var latestOpenMergeRequestIds = openMergeRequests
             .Select(mergeRequest => mergeRequest.Id)
             .ToHashSet();
-        var seenAt = DateTimeOffset.UtcNow;
+        var syncedAt = DateTimeOffset.UtcNow;
 
         logger.LogInformation(
             "Prepared cache update input. Current scoped MRs: {CurrentCount}; open MRs: {OpenCount}; assigned open: {AssignedOpenCount}; reviewer open: {ReviewerOpenCount}.",
@@ -82,7 +82,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
                 mergeRequest,
                 assignedMergeRequestIds.Contains(mergeRequest.Id),
                 reviewerMergeRequestIds.Contains(mergeRequest.Id),
-                seenAt,
+                syncedAt,
                 changeCollector,
                 cancellationToken);
 
@@ -242,7 +242,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
         MergeRequestInfo source,
         bool isAssignedToCurrentUser,
         bool isReviewerForCurrentUser,
-        DateTimeOffset seenAt,
+        DateTimeOffset syncedAt,
         CacheChangeCollector changeCollector,
         CancellationToken cancellationToken)
     {
@@ -257,7 +257,8 @@ public sealed class GitlabMergeRequestCacheUpdater(
         {
             entity = new MergeRequestEntity { Id = source.Id };
             dbContext.MergeRequests.Add(entity);
-            SetMergeRequestData(entity, source, isAssignedToCurrentUser, isReviewerForCurrentUser, seenAt);
+            SetMergeRequestData(entity, source, isAssignedToCurrentUser, isReviewerForCurrentUser, syncedAt);
+            MarkUnseen(entity, syncedAt);
             SyncAssignees(entity, source.Assignees);
             SyncReviewers(entity, source.Reviewers);
             SyncApprovals(entity, source.ApprovedBy);
@@ -352,11 +353,16 @@ public sealed class GitlabMergeRequestCacheUpdater(
             source,
             isAssignedToCurrentUser,
             isReviewerForCurrentUser,
-            seenAt);
+            syncedAt);
 
         changed |= SyncAssignees(entity, source.Assignees);
         changed |= SyncReviewers(entity, source.Reviewers);
         changed |= SyncApprovals(entity, source.ApprovedBy);
+
+        if (changed)
+        {
+            MarkUnseen(entity, syncedAt);
+        }
 
         return changed
             ? MergeRequestUpdateResult.Updated
@@ -388,6 +394,12 @@ public sealed class GitlabMergeRequestCacheUpdater(
         entity.LastSeenAt = seenAt;
 
         return changed;
+    }
+
+    private static void MarkUnseen(MergeRequestEntity entity, DateTimeOffset changedAt)
+    {
+        entity.HasUnseenChanges = true;
+        entity.UnseenChangedAt = changedAt;
     }
 
     private static IReadOnlyCollection<GitlabUser> GetAddedReviewers(

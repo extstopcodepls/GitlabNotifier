@@ -58,6 +58,7 @@ builder.Services
     });
 
 builder.Services.AddTransient<GitlabDataPuller>();
+builder.Services.AddTransient<GitlabNotifierDatabaseInitializer>();
 builder.Services.AddTransient<GitlabMergeRequestCacheUpdater>();
 builder.Services.AddSingleton<GitlabMergeRequestNotificationService>();
 builder.Services.AddSingleton<IGitlabMergeRequestNotificationService>(
@@ -67,6 +68,13 @@ builder.Services.AddHostedService(
 builder.Services.AddHostedService<GitlabPullerWorker>();
 
 using var host = builder.Build();
+
+using (var scope = host.Services.CreateScope())
+{
+    var databaseInitializer = scope.ServiceProvider.GetRequiredService<GitlabNotifierDatabaseInitializer>();
+    await databaseInitializer.EnsureInitializedAsync();
+}
+
 await host.RunAsync();
 
 static Uri EnsureTrailingSlash(Uri uri)

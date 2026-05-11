@@ -1,8 +1,6 @@
-using GitlabNotifier.Data;
 using GitlabNotifier.Runner.Services;
 using GitlabNotifier.Runner.Configuration;
 using GitlabNotifier.Runner.Notifications;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -39,12 +37,8 @@ public sealed class GitlabPullerWorker(
             logger.LogInformation("Starting GitLab runner poll iteration at {StartedAt}.", startedAt);
 
             using var scope = serviceScopeFactory.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
             var gitlabDataPuller = scope.ServiceProvider.GetRequiredService<GitlabDataPuller>();
             var cacheUpdater = scope.ServiceProvider.GetRequiredService<GitlabMergeRequestCacheUpdater>();
-
-            logger.LogInformation("Ensuring GitLab notifier database exists.");
-            await dbContext.Database.EnsureCreatedAsync(cancellationToken);
 
             logger.LogInformation("Pulling merge request data from GitLab.");
             var mergeRequests = await gitlabDataPuller.GetMergeRequestsForCurrentUserAsync(cancellationToken);
