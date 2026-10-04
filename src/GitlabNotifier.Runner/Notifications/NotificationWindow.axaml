@@ -54,7 +54,7 @@
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
                 <Button Grid.Column="2" Classes="toast-flat" Width="28" Height="28" Padding="0"
-                        Click="DismissNotification" ToolTip.Tip="Dismiss"
+                        Click="DismissAndAcknowledgeNotification" ToolTip.Tip="Dismiss"
                         AutomationProperties.Name="Dismiss notification">
                     <Path Data="M 1,1 L 9,9 M 9,1 L 1,9"
                           Stroke="{DynamicResource SystemControlForegroundBaseMediumBrush}"
