@@ -1,5 +1,4 @@
-using DesktopNotifications;
-using DesktopNotifications.Windows;
+using Avalonia.Threading;
 using GitlabNotifier.Data;
 using GitlabNotifier.Runner.Configuration;
 using GitlabNotifier.Runner.Models;
@@ -9,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace GitlabNotifier.Runner.Notifications;
 
@@ -19,32 +19,27 @@ public sealed class GitlabMergeRequestNotificationService(
     ILogger<GitlabMergeRequestNotificationService> logger)
     : IHostedService, IGitlabMergeRequestNotificationService
 {
-    private WindowsNotificationManager? _notificationManager;
     private CancellationTokenSource? _notificationLoopCancellationTokenSource;
     private Task? _notificationLoopTask;
     private readonly SemaphoreSlim _notificationSemaphore = new(1, 1);
+    private bool _avaloniaInitialized;
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Initializing desktop notification manager.");
+        logger.LogInformation("Initializing Avalonia notification system.");
 
-        var applicationContext = WindowsApplicationContext.FromCurrentProcess(
-            "GitlabNotifier.Runner",
-            "GitLab Notifier");
-        _notificationManager = new WindowsNotificationManager(applicationContext);
-        _notificationManager.NotificationActivated += OnNotificationActivated;
-        _notificationManager.NotificationDismissed += OnNotificationDismissed;
-
-        await _notificationManager.Initialize();
-        logger.LogInformation("Desktop notification manager initialized.");
+        _avaloniaInitialized = true;
+        logger.LogInformation("Avalonia notification system initialized.");
 
         _notificationLoopCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _notificationLoopTask = RunNotificationLoopAsync(_notificationLoopCancellationTokenSource.Token);
+
+        return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Stopping desktop notification manager.");
+        logger.LogInformation("Stopping notification system.");
 
         if (_notificationLoopCancellationTokenSource is not null)
         {
@@ -60,13 +55,6 @@ public sealed class GitlabMergeRequestNotificationService(
             catch (OperationCanceledException)
             {
             }
-        }
-
-        if (_notificationManager is not null)
-        {
-            _notificationManager.NotificationActivated -= OnNotificationActivated;
-            _notificationManager.NotificationDismissed -= OnNotificationDismissed;
-            _notificationManager.Dispose();
         }
     }
 
@@ -127,9 +115,9 @@ public sealed class GitlabMergeRequestNotificationService(
 
     private async Task ShowPendingMergeRequestNotificationCoreAsync(CancellationToken cancellationToken)
     {
-        if (_notificationManager is null)
+        if (!_avaloniaInitialized)
         {
-            logger.LogWarning("Notification manager is not initialized. Skipping desktop notification.");
+            logger.LogWarning("Avalonia is not initialized. Skipping notification.");
             return;
         }
 
@@ -142,21 +130,57 @@ public sealed class GitlabMergeRequestNotificationService(
         }
 
         var body = BuildPendingNotificationBody(pendingMergeRequests);
+        var title = pendingMergeRequests.Count == 1
+            ? "GitLab merge request changed"
+            : "GitLab merge requests changed";
 
         logger.LogInformation(
-            "Showing desktop notification for unseen GitLab MRs. Count: {Count}.",
+            "Showing Avalonia notification for unseen GitLab MRs. Count: {Count}.",
             pendingMergeRequests.Count);
 
-        var notification = new Notification
+        // Show notification on the Avalonia UI thread
+        await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            Title = pendingMergeRequests.Count == 1
-                ? "GitLab merge request changed"
-                : "GitLab merge requests changed",
-            Body = body
-        };
+            var window = new NotificationWindow(
+                title: title,
+                body: body,
+                autoDismissAfter: TimeSpan.FromSeconds(10),
+                onActivated: () =>
+                {
+                    _ = MarkPendingMergeRequestsSeenAsync();
+                    OpenMergeRequestsDashboard();
+                },
+                onDismissed: () => _ = MarkPendingMergeRequestsSeenAsync());
 
-        await _notificationManager.ShowNotification(notification, expirationTime: null);
+            window.Show();
+            PlayNotificationSound();
+        }, DispatcherPriority.Normal, cancellationToken);
     }
+
+    private void PlayNotificationSound()
+    {
+        const uint soundAsync = 0x0001;
+        const uint soundAlias = 0x00010000;
+        const uint soundSystem = 0x00200000;
+
+        try
+        {
+            // Use the Windows notification sound scheme and System Sounds volume.
+            // PlaySound falls back to the default system sound if the alias is unavailable.
+            if (!PlaySound("Notification.Default", IntPtr.Zero, soundAsync | soundAlias | soundSystem))
+            {
+                logger.LogDebug("Windows notification sound could not be played.");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to play the Windows notification sound.");
+        }
+    }
+
+    [DllImport("winmm.dll", EntryPoint = "PlaySoundW", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PlaySound(string sound, IntPtr module, uint flags);
 
     private async Task<IReadOnlyCollection<MergeRequestChangeInfo>> GetPendingMergeRequestsAsync(
         CancellationToken cancellationToken)
@@ -190,23 +214,6 @@ public sealed class GitlabMergeRequestNotificationService(
                 WebUrl = mergeRequest.WebUrl
             })
             .ToList();
-    }
-
-    private void OnNotificationActivated(object? sender, NotificationActivatedEventArgs args)
-    {
-        logger.LogInformation(
-            "GitLab notifier notification activated. Action: {ActionId}",
-            args.ActionId);
-
-        _ = MarkPendingMergeRequestsSeenAsync();
-        OpenMergeRequestsDashboard();
-    }
-
-    private void OnNotificationDismissed(object? sender, NotificationDismissedEventArgs args)
-    {
-        logger.LogInformation(
-            "GitLab notifier notification dismissed. Reason: {Reason}",
-            args.Reason);
     }
 
     private async Task MarkPendingMergeRequestsSeenAsync()

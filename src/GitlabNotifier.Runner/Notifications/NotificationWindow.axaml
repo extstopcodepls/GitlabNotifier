@@ -1,0 +1,97 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GitlabNotifier.Runner.Notifications.NotificationWindow"
+        Title="GitLab notification" Width="384" MaxHeight="480" SizeToContent="Height"
+        CanResize="False" ShowActivated="False" ShowInTaskbar="False" Topmost="True"
+        WindowStartupLocation="Manual" WindowDecorations="None"
+        Background="Transparent" TransparencyLevelHint="Transparent"
+        RequestedThemeVariant="Default"
+        FontFamily="Segoe UI" FontSize="14" UseLayoutRounding="True">
+    <Window.Styles>
+        <Style Selector="Button.toast-flat">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseHighBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <ContentPresenter Name="PART_ContentPresenter"
+                                      HorizontalAlignment="Stretch"
+                                      Background="{TemplateBinding Background}"
+                                      CornerRadius="{TemplateBinding CornerRadius}"
+                                      Padding="{TemplateBinding Padding}"
+                                      Content="{TemplateBinding Content}"
+                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="Button.toast-flat:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPointerOver}" />
+        </Style>
+        <Style Selector="Button.toast-flat:pressed">
+            <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPressed}" />
+        </Style>
+        <Style Selector="ItemsControl#ActionButtons Button">
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Margin" Value="4,0" />
+            <Setter Property="CornerRadius" Value="4" />
+        </Style>
+    </Window.Styles>
+    <!-- Leave room around the card for its shadow. -->
+    <Border x:Name="NotificationCard" Margin="8" Padding="16,12,16,16"
+            CornerRadius="8" BorderThickness="1"
+            BorderBrush="{DynamicResource SystemControlTransientBorderBrush}"
+            Background="{DynamicResource SystemRegionBrush}" BoxShadow="0 3 8 0 #26000000">
+        <Grid RowDefinitions="Auto,*,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,8">
+                <Image Source="avares://GitlabNotifier.Runner/Assets/gitlab-logo.ico"
+                       Width="20" Height="20" Margin="0,0,8,0"
+                       AutomationProperties.Name="GitLab" />
+                <TextBlock Grid.Column="1" Text="GitLab Notifier" FontSize="12"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+                <Button Grid.Column="2" Classes="toast-flat" Width="28" Height="28" Padding="0"
+                        Click="DismissNotification" ToolTip.Tip="Dismiss"
+                        AutomationProperties.Name="Dismiss notification">
+                    <Path Data="M 1,1 L 9,9 M 9,1 L 1,9"
+                          Stroke="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                          StrokeThickness="1" Width="10" Height="10" />
+                </Button>
+            </Grid>
+            <Button x:Name="NotificationContent" Grid.Row="1" Classes="toast-flat" Padding="4,4,4,8"
+                    Margin="-4,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                    Click="ActivateNotification"
+                    AutomationProperties.Name="Open GitLab merge requests">
+                <Grid RowDefinitions="Auto,*">
+                    <TextBlock x:Name="NotificationTitle" FontWeight="SemiBold" FontSize="14"
+                               HorizontalAlignment="Stretch" LineHeight="20" TextWrapping="Wrap"
+                               Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}" />
+                    <ScrollViewer x:Name="NotificationBodyScroll" Grid.Row="1" Margin="0,6,0,0" MaxHeight="270"
+                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="NotificationBody" FontSize="14" LineHeight="20"
+                                   HorizontalAlignment="Stretch" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+                    </ScrollViewer>
+                </Grid>
+            </Button>
+            <!-- Reserved footer: add buttons to NotificationWindow.Actions when
+                 actions are implemented. Each button owns its click handler. -->
+            <ItemsControl x:Name="ActionButtons" Grid.Row="2" Margin="-4,8,-4,0" MinHeight="32"
+                          IsVisible="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Rows="1" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+            <Button Grid.Row="3" Content="Dismiss" Margin="0,8,0,0" MinHeight="32"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    Click="DismissAndAcknowledgeNotification" />
+        </Grid>
+    </Border>
+</Window>
