@@ -61,24 +61,17 @@
                           StrokeThickness="1" Width="10" Height="10" />
                 </Button>
             </Grid>
-            <Button x:Name="NotificationContent" Grid.Row="1" Classes="toast-flat" Padding="4,4,4,8"
-                    Margin="-4,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                    Click="ActivateNotification"
-                    AutomationProperties.Name="Open GitLab merge requests">
-                <Grid RowDefinitions="Auto,*">
-                    <TextBlock x:Name="NotificationTitle" FontWeight="SemiBold" FontSize="14"
-                               HorizontalAlignment="Stretch" LineHeight="20" TextWrapping="Wrap"
-                               Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}" />
-                    <ScrollViewer x:Name="NotificationBodyScroll" Grid.Row="1" Margin="0,6,0,0" MaxHeight="270"
-                                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  VerticalScrollBarVisibility="Auto">
-                        <TextBlock x:Name="NotificationBody" FontSize="14" LineHeight="20"
-                                   HorizontalAlignment="Stretch" TextWrapping="Wrap"
-                                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
-                    </ScrollViewer>
-                </Grid>
-            </Button>
+            <Grid Grid.Row="1" RowDefinitions="Auto,*">
+                <TextBlock x:Name="NotificationTitle" FontWeight="SemiBold" FontSize="14"
+                           HorizontalAlignment="Stretch" LineHeight="20" TextWrapping="Wrap"
+                           Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}" />
+                <ScrollViewer x:Name="NotificationBodyScroll" Grid.Row="1" Margin="-4,6,-4,0" MaxHeight="270"
+                              HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="MergeRequestEntries" />
+                </ScrollViewer>
+            </Grid>
             <!-- Reserved footer: add buttons to NotificationWindow.Actions when
                  actions are implemented. Each button owns its click handler. -->
             <ItemsControl x:Name="ActionButtons" Grid.Row="2" Margin="-4,8,-4,0" MinHeight="32"

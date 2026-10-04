@@ -1,15 +1,19 @@
 using System.Collections.ObjectModel;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
+using GitlabNotifier.Runner.Models;
 
 namespace GitlabNotifier.Runner.Notifications;
 
 /// <summary>Toast-like notification at the bottom-right of the screen.</summary>
 public sealed partial class NotificationWindow : Window
 {
-    private readonly Action? _onActivated;
+    private readonly Action<MergeRequestChangeInfo>? _onActivated;
     private readonly Action? _onDismissed;
     private readonly DispatcherTimer? _autoDismissTimer;
 
@@ -19,18 +23,47 @@ public sealed partial class NotificationWindow : Window
     /// </summary>
     public ObservableCollection<Button> Actions { get; } = [];
 
-    public NotificationWindow() : this(string.Empty, string.Empty)
+    public NotificationWindow() : this(string.Empty, [])
     {
     }
 
-    public NotificationWindow(string title, string body,
-        TimeSpan? autoDismissAfter = null, Action? onActivated = null, Action? onDismissed = null)
+    public NotificationWindow(string title, IReadOnlyCollection<MergeRequestChangeInfo> mergeRequests,
+        TimeSpan? autoDismissAfter = null, Action<MergeRequestChangeInfo>? onActivated = null,
+        Action? onDismissed = null)
     {
         InitializeComponent();
         _onActivated = onActivated;
         _onDismissed = onDismissed;
         NotificationTitle.Text = title;
-        NotificationBody.Text = body;
+        foreach (var mergeRequest in mergeRequests)
+        {
+            if (MergeRequestEntries.Children.Count > 0)
+            {
+                MergeRequestEntries.Children.Add(new Border
+                {
+                    Height = 1,
+                    Background = Brushes.Gray,
+                    Margin = new Thickness(4, 6)
+                });
+            }
+
+            var button = new Button
+            {
+                Classes = { "toast-flat" },
+                Padding = new Thickness(4, 8),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Content = new TextBlock
+                {
+                    Text = $"MR needs attention: {mergeRequest.Title}",
+                    TextWrapping = TextWrapping.Wrap,
+                    LineHeight = 20
+                }
+            };
+            AutomationProperties.SetName(button, $"Open merge request: {mergeRequest.Title}");
+            button.Click += (_, e) => ActivateMergeRequest(mergeRequest, e);
+            MergeRequestEntries.Children.Add(button);
+        }
         ActionButtons.ItemsSource = Actions;
         Actions.CollectionChanged += (_, _) => ActionButtons.IsVisible = Actions.Count > 0;
 
@@ -75,12 +108,6 @@ public sealed partial class NotificationWindow : Window
         base.OnClosed(e);
     }
 
-    private void DismissNotification(object? sender, RoutedEventArgs e)
-    {
-        e.Handled = true;
-        Close();
-    }
-
     private void DismissAndAcknowledgeNotification(object? sender, RoutedEventArgs e)
     {
         e.Handled = true;
@@ -88,10 +115,10 @@ public sealed partial class NotificationWindow : Window
         _onDismissed?.Invoke();
     }
 
-    private void ActivateNotification(object? sender, RoutedEventArgs e)
+    private void ActivateMergeRequest(MergeRequestChangeInfo mergeRequest, RoutedEventArgs e)
     {
         e.Handled = true;
         Close();
-        _onActivated?.Invoke();
+        _onActivated?.Invoke(mergeRequest);
     }
 }

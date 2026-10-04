@@ -129,7 +129,7 @@ public sealed class GitlabMergeRequestNotificationService(
             return;
         }
 
-        var body = BuildPendingNotificationBody(pendingMergeRequests);
+        var displayedMergeRequestIds = pendingMergeRequests.Select(mergeRequest => mergeRequest.Id).ToArray();
         var title = pendingMergeRequests.Count == 1
             ? "GitLab merge request changed"
             : "GitLab merge requests changed";
@@ -143,14 +143,14 @@ public sealed class GitlabMergeRequestNotificationService(
         {
             var window = new NotificationWindow(
                 title: title,
-                body: body,
+                mergeRequests: pendingMergeRequests,
                 autoDismissAfter: TimeSpan.FromSeconds(10),
-                onActivated: () =>
+                onActivated: mergeRequest =>
                 {
-                    _ = MarkPendingMergeRequestsSeenAsync();
-                    OpenMergeRequestsDashboard();
+                    _ = MarkMergeRequestsSeenAsync(displayedMergeRequestIds);
+                    OpenMergeRequest(mergeRequest);
                 },
-                onDismissed: () => _ = MarkPendingMergeRequestsSeenAsync());
+                onDismissed: () => _ = MarkMergeRequestsSeenAsync(displayedMergeRequestIds));
 
             window.Show();
             PlayNotificationSound();
@@ -216,14 +216,14 @@ public sealed class GitlabMergeRequestNotificationService(
             .ToList();
     }
 
-    private async Task MarkPendingMergeRequestsSeenAsync()
+    private async Task MarkMergeRequestsSeenAsync(long[] displayedMergeRequestIds)
     {
         try
         {
             using var scope = serviceScopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
             var pendingMergeRequests = await dbContext.MergeRequests
-                .Where(mergeRequest => mergeRequest.HasUnseenChanges)
+                .Where(mergeRequest => mergeRequest.HasUnseenChanges && displayedMergeRequestIds.Contains(mergeRequest.Id))
                 .ToListAsync();
 
             foreach (var mergeRequest in pendingMergeRequests)
@@ -235,37 +235,24 @@ public sealed class GitlabMergeRequestNotificationService(
             await dbContext.SaveChangesAsync();
 
             logger.LogInformation(
-                "Marked unseen GitLab MRs as seen from notification click. Count: {Count}.",
+                "Marked displayed GitLab MRs as seen from notification interaction. Count: {Count}.",
                 pendingMergeRequests.Count);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to mark GitLab MRs as seen from notification click.");
+            logger.LogError(ex, "Failed to mark GitLab MRs as seen from notification interaction.");
         }
     }
 
-    private static string BuildPendingNotificationBody(IReadOnlyCollection<MergeRequestChangeInfo> mergeRequests)
+    private void OpenMergeRequest(MergeRequestChangeInfo mergeRequest)
     {
-        var lines = mergeRequests
-            .Take(8)
-            .Select(mergeRequest => $"MR needs attention: {mergeRequest.Title}")
-            .ToList();
-
-        if (mergeRequests.Count > 8)
-        {
-            lines.Add($"+{mergeRequests.Count - 8} more unseen MRs");
-        }
-
-        return string.Join(Environment.NewLine, lines);
-    }
-
-    private void OpenMergeRequestsDashboard()
-    {
-        var url = BuildMergeRequestsDashboardUrl(gitlabOptions.Value.Url);
+        var url = string.IsNullOrWhiteSpace(mergeRequest.WebUrl)
+            ? BuildMergeRequestsDashboardUrl(gitlabOptions.Value.Url)
+            : mergeRequest.WebUrl;
 
         try
         {
-            logger.LogInformation("Opening GitLab merge requests dashboard from notification click. Url: {Url}", url);
+            logger.LogInformation("Opening GitLab merge request from notification click. Url: {Url}", url);
             Process.Start(new ProcessStartInfo(url)
             {
                 UseShellExecute = true
@@ -273,7 +260,7 @@ public sealed class GitlabMergeRequestNotificationService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to open GitLab merge requests dashboard: {Url}", url);
+            logger.LogError(ex, "Failed to open GitLab merge request: {Url}", url);
         }
     }
 
