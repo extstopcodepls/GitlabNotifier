@@ -129,7 +129,6 @@ public sealed class GitlabMergeRequestNotificationService(
             return;
         }
 
-        var displayedMergeRequestIds = pendingMergeRequests.Select(mergeRequest => mergeRequest.Id).ToArray();
         var title = pendingMergeRequests.Count == 1
             ? "GitLab merge request changed"
             : "GitLab merge requests changed";
@@ -147,10 +146,10 @@ public sealed class GitlabMergeRequestNotificationService(
                 autoDismissAfter: TimeSpan.FromSeconds(10),
                 onActivated: mergeRequest =>
                 {
-                    _ = MarkMergeRequestsSeenAsync(displayedMergeRequestIds);
+                    _ = MarkMergeRequestsSeenAsync(pendingMergeRequests);
                     OpenMergeRequest(mergeRequest);
                 },
-                onDismissed: () => _ = MarkMergeRequestsSeenAsync(displayedMergeRequestIds));
+                onDismissed: () => _ = MarkMergeRequestsSeenAsync(pendingMergeRequests));
 
             window.Show();
             PlayNotificationSound();
@@ -199,6 +198,7 @@ public sealed class GitlabMergeRequestNotificationService(
                 Title = mergeRequest.Title,
                 WebUrl = mergeRequest.WebUrl,
                 LastSeenAt = mergeRequest.LastSeenAt,
+                HasUnseenReviewReRequest = mergeRequest.HasUnseenReviewReRequest,
                 UnseenChangedAt = mergeRequest.UnseenChangedAt
             })
             .ToListAsync(cancellationToken);
@@ -211,32 +211,35 @@ public sealed class GitlabMergeRequestNotificationService(
                 Iid = mergeRequest.Iid,
                 ProjectId = mergeRequest.ProjectId,
                 Title = mergeRequest.Title,
-                WebUrl = mergeRequest.WebUrl
+                WebUrl = mergeRequest.WebUrl,
+                HasUnseenReviewReRequest = mergeRequest.HasUnseenReviewReRequest,
+                UnseenChangedAt = mergeRequest.UnseenChangedAt
             })
             .ToList();
     }
 
-    private async Task MarkMergeRequestsSeenAsync(long[] displayedMergeRequestIds)
+    private async Task MarkMergeRequestsSeenAsync(IReadOnlyCollection<MergeRequestChangeInfo> displayedMergeRequests)
     {
         try
         {
             using var scope = serviceScopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<GitlabNotifierDbContext>();
-            var pendingMergeRequests = await dbContext.MergeRequests
-                .Where(mergeRequest => mergeRequest.HasUnseenChanges && displayedMergeRequestIds.Contains(mergeRequest.Id))
-                .ToListAsync();
-
-            foreach (var mergeRequest in pendingMergeRequests)
+            var acknowledgedCount = 0;
+            foreach (var displayed in displayedMergeRequests)
             {
-                mergeRequest.HasUnseenChanges = false;
-                mergeRequest.UnseenChangedAt = null;
+                acknowledgedCount += await dbContext.MergeRequests
+                    .Where(mergeRequest => mergeRequest.Id == displayed.Id
+                        && mergeRequest.HasUnseenChanges
+                        && mergeRequest.UnseenChangedAt == displayed.UnseenChangedAt)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(mergeRequest => mergeRequest.HasUnseenChanges, false)
+                        .SetProperty(mergeRequest => mergeRequest.HasUnseenReviewReRequest, false)
+                        .SetProperty(mergeRequest => mergeRequest.UnseenChangedAt, (DateTimeOffset?)null));
             }
-
-            await dbContext.SaveChangesAsync();
 
             logger.LogInformation(
                 "Marked displayed GitLab MRs as seen from notification interaction. Count: {Count}.",
-                pendingMergeRequests.Count);
+                acknowledgedCount);
         }
         catch (Exception ex)
         {
@@ -287,6 +290,7 @@ public sealed class GitlabMergeRequestNotificationService(
 
         public DateTimeOffset LastSeenAt { get; init; }
 
+        public bool HasUnseenReviewReRequest { get; init; }
         public DateTimeOffset? UnseenChangedAt { get; init; }
     }
 }

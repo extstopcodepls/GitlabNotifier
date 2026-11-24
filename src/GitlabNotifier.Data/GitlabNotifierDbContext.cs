@@ -16,6 +16,8 @@ public sealed class GitlabNotifierDbContext(DbContextOptions<GitlabNotifierDbCon
 
     public DbSet<MergeRequestApprovalEntity> MergeRequestApprovals => Set<MergeRequestApprovalEntity>();
 
+    public DbSet<ReviewRequestNoteBaselineEntity> ReviewRequestNoteBaselines => Set<ReviewRequestNoteBaselineEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<GitlabUserEntity>(entity =>
@@ -81,6 +83,12 @@ public sealed class GitlabNotifierDbContext(DbContextOptions<GitlabNotifierDbCon
                 .WithMany()
                 .HasForeignKey(approval => approval.UserId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ReviewRequestNoteBaselineEntity>(entity =>
+        {
+            entity.ToTable("ReviewRequestNoteBaselines");
+            entity.HasKey(baseline => new { baseline.MergeRequestId, baseline.UserId });
         });
     }
 }

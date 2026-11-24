@@ -16,6 +16,8 @@ public sealed class GitlabMergeRequestCacheUpdateResult
 
     public IReadOnlyCollection<MergeRequestReviewRequestedInfo> ReviewRequestedOnAssignedMergeRequests { get; init; } = [];
 
+    public IReadOnlyCollection<MergeRequestChangeInfo> ReRequestedReviewMergeRequests { get; init; } = [];
+
     public IReadOnlyCollection<MergeRequestTitleChangeInfo> TitleChanges { get; init; } = [];
 
     public int UpdatedCount { get; init; }
@@ -32,12 +34,15 @@ public sealed class GitlabMergeRequestCacheUpdateResult
         || ReviewerForMeMergeRequests.Count > 0
         || RemovedFromReviewMergeRequests.Count > 0
         || ReviewRequestedOnAssignedMergeRequests.Count > 0
+        || ReRequestedReviewMergeRequests.Count > 0
         || TitleChanges.Count > 0
         || UpdatedCount > 0;
 }
 
 public sealed class MergeRequestChangeInfo
 {
+    public bool HasUnseenReviewReRequest { get; init; }
+    public DateTimeOffset? UnseenChangedAt { get; init; }
     public long Id { get; init; }
 
     public long Iid { get; init; }

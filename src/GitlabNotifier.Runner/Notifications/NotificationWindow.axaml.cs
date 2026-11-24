@@ -55,7 +55,9 @@ public sealed partial class NotificationWindow : Window
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Content = new TextBlock
                 {
-                    Text = $"MR needs attention: {mergeRequest.Title}",
+                    Text = mergeRequest.HasUnseenReviewReRequest
+                        ? $"Review re-requested: {mergeRequest.Title}"
+                        : $"MR needs attention: {mergeRequest.Title}",
                     TextWrapping = TextWrapping.Wrap,
                     LineHeight = 20
                 }

@@ -24,6 +24,8 @@ public sealed class MergeRequestEntity
 
     public bool HasUnseenChanges { get; set; }
 
+    public bool HasUnseenReviewReRequest { get; set; }
+
     public DateTimeOffset? UnseenChangedAt { get; set; }
 
     public List<MergeRequestAssigneeEntity> Assignees { get; set; } = [];

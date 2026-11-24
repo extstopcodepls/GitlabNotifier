@@ -12,6 +12,26 @@ public sealed class GitlabMergeRequestCacheUpdater(
 {
     private const string OpenedState = "opened";
 
+    // Non-empty IssuableEvents translations from the GitLab locale catalogs.
+    // The re-request note uses the acting user's locale. Assignment notes use the instance default.
+    private static readonly (string Request, string Removal)[] ReviewNotePhrases =
+    [
+        ("requested review from ", "removed review request for "),
+        ("Review angefragt von ", "Reviewanfrage entfernt für "),
+        ("se solicitó la revisión de ", "se eliminó la solicitud de revisión para "),
+        ("a demandé une revue à ", "a supprimé la demande de revue pour "),
+        ("Athbhreithniú iarrtha ó ", "Iarratas athbhreithnithe bainte ar "),
+        ("ha richiesto la revisione da parte di ", "rimossa la richiesta di revisione per "),
+        ("は次のユーザーにレビューをリクエスト ", "は次のユーザーからレビューリクエストを削除 "),
+        ("리뷰를 요청함 ", "제거된 리뷰 요청 "),
+        ("revisão solicitada de ", "removeu a solicitação de revisão para "),
+        ("a solicitat revizuirea de la ", "a înlăturat solicitarea de revizuire pentru "),
+        ("запросил(а) рецензию у ", "удалил(а) запрос на ревью у "),
+        ("надіслано запит на перевірку від ", "видалено запит на перевірку для "),
+        ("请求审核 ", "已删除审核请求 "),
+        ("審查要求 ", "已移除審查請求 ")
+    ];
+
     public async Task<GitlabMergeRequestCacheUpdateResult> UpdateAsync(
         GitlabMergeRequestsData mergeRequestsData,
         CancellationToken cancellationToken = default)
@@ -52,6 +72,9 @@ public sealed class GitlabMergeRequestCacheUpdater(
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
         var changeCollector = new CacheChangeCollector();
+        var reRequestedMergeRequestIds = await ProcessReviewRequestNotesAsync(
+            mergeRequestsData,
+            cancellationToken);
 
         var removedMergeRequests = await RemoveStaleMergeRequestsAsync(
             latestOpenMergeRequestIds,
@@ -82,6 +105,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
                 mergeRequest,
                 assignedMergeRequestIds.Contains(mergeRequest.Id),
                 reviewerMergeRequestIds.Contains(mergeRequest.Id),
+                reRequestedMergeRequestIds.Contains(mergeRequest.Id),
                 syncedAt,
                 changeCollector,
                 cancellationToken);
@@ -120,12 +144,13 @@ public sealed class GitlabMergeRequestCacheUpdater(
             ReviewerForMeMergeRequests = changeCollector.ReviewerForMeMergeRequests,
             RemovedFromReviewMergeRequests = changeCollector.RemovedFromReviewMergeRequests,
             ReviewRequestedOnAssignedMergeRequests = changeCollector.ReviewRequestedOnAssignedMergeRequests,
+            ReRequestedReviewMergeRequests = changeCollector.ReRequestedReviewMergeRequests,
             TitleChanges = changeCollector.TitleChanges,
             UpdatedCount = updatedCount
         };
 
         logger.LogInformation(
-            "Finished merge request cache update. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; review requested on assigned MRs: {ReviewRequestedCount}; title changes: {TitleChangeCount}.",
+            "Finished merge request cache update. Added: {AddedCount}; updated: {UpdatedCount}; removed: {RemovedCount}; assigned to me: {AssignedCount}; unassigned from me: {UnassignedCount}; made reviewer: {ReviewerCount}; removed from review: {RemovedReviewerCount}; review requested on assigned MRs: {ReviewRequestedCount}; review re-requested: {ReviewReRequestedCount}; title changes: {TitleChangeCount}.",
             result.AddedCount,
             result.UpdatedCount,
             result.RemovedCount,
@@ -134,10 +159,143 @@ public sealed class GitlabMergeRequestCacheUpdater(
             result.ReviewerForMeMergeRequests.Count,
             result.RemovedFromReviewMergeRequests.Count,
             result.ReviewRequestedOnAssignedMergeRequests.Count,
+            result.ReRequestedReviewMergeRequests.Count,
             result.TitleChanges.Count);
 
         return result;
     }
+
+    private async Task<HashSet<long>> ProcessReviewRequestNotesAsync(
+        GitlabMergeRequestsData data,
+        CancellationToken cancellationToken)
+    {
+        var reRequestedIds = new HashSet<long>();
+        foreach (var scan in data.ReviewRequestNotes)
+        {
+            var baseline = await dbContext.ReviewRequestNoteBaselines.FindAsync(
+                [scan.MergeRequestId, scan.CurrentUser.Id], cancellationToken);
+            var savedCursor = baseline is null
+                ? null
+                : new ReviewRequestNoteCursor(baseline.LastNoteId, baseline.IsReviewer, baseline.PendingSince);
+            if (savedCursor != scan.PreviousCursor)
+            {
+                // The snapshot was fetched before another poll advanced this cursor.
+                continue;
+            }
+
+            if (baseline is null)
+            {
+                baseline = new ReviewRequestNoteBaselineEntity
+                {
+                    MergeRequestId = scan.MergeRequestId,
+                    UserId = scan.CurrentUser.Id,
+                    PendingSince = scan.ObservedAt
+                };
+                dbContext.ReviewRequestNoteBaselines.Add(baseline);
+            }
+
+            if (scan.LatestNoteId is not { } latestNoteId)
+            {
+                continue;
+            }
+
+            var (isReRequested, isReviewer) = ReplayReviewNotes(scan, baseline.IsReviewer);
+            if (isReRequested)
+            {
+                reRequestedIds.Add(scan.MergeRequestId);
+            }
+
+            baseline.LastNoteId = latestNoteId;
+            baseline.IsReviewer = isReviewer;
+            baseline.PendingSince = null;
+        }
+
+        return reRequestedIds;
+    }
+
+    private static (bool IsReRequested, bool IsReviewer) ReplayReviewNotes(
+        ReviewRequestNoteScan scan, bool isReviewer)
+    {
+        const string approvalSuffix = "removed approval";
+        const StringComparison comparison = StringComparison.OrdinalIgnoreCase;
+        var mention = $"@{scan.CurrentUser.Username}";
+        var isReRequested = false;
+        foreach (var note in scan.Notes.OrderBy(note => note.CreatedAt).ThenBy(note => note.Id))
+        {
+            if (!note.IsSystem || string.IsNullOrEmpty(note.Body))
+            {
+                continue;
+            }
+
+            var (requestPrefix, removalPrefix) = ReviewNotePhrases.FirstOrDefault(phrases =>
+                note.Body.StartsWith(phrases.Request, comparison) || note.Body.StartsWith(phrases.Removal, comparison));
+            if (requestPrefix is null || removalPrefix is null)
+            {
+                continue;
+            }
+
+            if (note.Body.StartsWith(removalPrefix, comparison))
+            {
+                isReviewer &= !ContainsMention(note.Body.AsSpan(removalPrefix.Length), mention);
+                continue;
+            }
+
+            var requested = note.Body.AsSpan(requestPrefix.Length);
+            var combinedRemoval = " and " + removalPrefix;
+            var removalIndex = requested.IndexOf(combinedRemoval, comparison);
+            if (removalIndex >= 0)
+            {
+                if (ContainsMention(requested[(removalIndex + combinedRemoval.Length)..], mention))
+                {
+                    isReviewer = false;
+                }
+                requested = requested[..removalIndex];
+            }
+
+            // GitLab leaves the approval text in English, but the list connector can be localized.
+            var removedApproval = requested.Length > mention.Length
+                && requested.StartsWith(mention, comparison)
+                && !IsUsernameCharacter(requested[mention.Length])
+                && requested.EndsWith(approvalSuffix, comparison)
+                && !requested[mention.Length..].Contains('@');
+            var singleReviewer = requested.Equals(mention, comparison) && removalIndex < 0;
+            if (note.Author is { Id: > 0 } author && author.Id != scan.CurrentUser.Id
+                && (removedApproval || (isReviewer && singleReviewer)))
+            {
+                isReRequested = true;
+            }
+
+            isReviewer |= ContainsMention(requested, mention);
+        }
+
+        return (isReRequested, isReviewer);
+    }
+
+    private static bool ContainsMention(ReadOnlySpan<char> text, string mention)
+    {
+        while (!text.IsEmpty)
+        {
+            var start = text.IndexOf(mention, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+            {
+                return false;
+            }
+
+            var end = start + mention.Length;
+            if ((start == 0 || !IsUsernameCharacter(text[start - 1]))
+                && (end == text.Length || !IsUsernameCharacter(text[end])))
+            {
+                return true;
+            }
+
+            text = text[end..];
+        }
+
+        return false;
+    }
+
+    private static bool IsUsernameCharacter(char character) =>
+        char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.';
 
     private async Task<IReadOnlyCollection<MergeRequestEntity>> RemoveStaleMergeRequestsAsync(
         IReadOnlySet<long> latestMergeRequestIds,
@@ -242,6 +400,7 @@ public sealed class GitlabMergeRequestCacheUpdater(
         MergeRequestInfo source,
         bool isAssignedToCurrentUser,
         bool isReviewerForCurrentUser,
+        bool isReRequestedReview,
         DateTimeOffset syncedAt,
         CacheChangeCollector changeCollector,
         CancellationToken cancellationToken)
@@ -253,12 +412,18 @@ public sealed class GitlabMergeRequestCacheUpdater(
             .AsSplitQuery()
             .FirstOrDefaultAsync(mergeRequest => mergeRequest.Id == source.Id, cancellationToken);
 
+        if (isReRequestedReview)
+        {
+            changeCollector.ReRequestedReviewMergeRequests.Add(ToChangeInfo(source));
+        }
+
         if (entity is null)
         {
             entity = new MergeRequestEntity { Id = source.Id };
             dbContext.MergeRequests.Add(entity);
             SetMergeRequestData(entity, source, isAssignedToCurrentUser, isReviewerForCurrentUser, syncedAt);
             MarkUnseen(entity, syncedAt);
+            entity.HasUnseenReviewReRequest |= isReRequestedReview;
             SyncAssignees(entity, source.Assignees);
             SyncReviewers(entity, source.Reviewers);
             SyncApprovals(entity, source.ApprovedBy);
@@ -359,12 +524,13 @@ public sealed class GitlabMergeRequestCacheUpdater(
         changed |= SyncReviewers(entity, source.Reviewers);
         changed |= SyncApprovals(entity, source.ApprovedBy);
 
-        if (changed)
+        if (changed || isReRequestedReview)
         {
             MarkUnseen(entity, syncedAt);
+            entity.HasUnseenReviewReRequest |= isReRequestedReview;
         }
 
-        return changed
+        return changed || isReRequestedReview
             ? MergeRequestUpdateResult.Updated
             : MergeRequestUpdateResult.Unchanged;
     }
@@ -612,6 +778,8 @@ public sealed class GitlabMergeRequestCacheUpdater(
         public List<MergeRequestChangeInfo> RemovedFromReviewMergeRequests { get; } = [];
 
         public List<MergeRequestReviewRequestedInfo> ReviewRequestedOnAssignedMergeRequests { get; } = [];
+
+        public List<MergeRequestChangeInfo> ReRequestedReviewMergeRequests { get; } = [];
 
         public List<MergeRequestTitleChangeInfo> TitleChanges { get; } = [];
     }
